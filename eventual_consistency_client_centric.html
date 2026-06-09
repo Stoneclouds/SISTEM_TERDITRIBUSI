@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eventual Consistency - Konsistensi Berpusat pada Klien</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+  header {
+    background: linear-gradient(135deg, #1a1f2e 0%, #16213e 100%);
+    border-bottom: 1px solid #2d3748;
+    padding: 20px 24px;
+    text-align: center;
+  }
+  header h1 { font-size: 22px; font-weight: 700; color: #63b3ed; margin-bottom: 4px; }
+  header p { font-size: 13px; color: #718096; }
+
+  .main-container { padding: 24px; max-width: 900px; margin: 0 auto; }
+
+  /* === INFO CARDS === */
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .info-card {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .info-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .info-card.eventual h3 { color: #f6ad55; }
+  .info-card.ryw h3 { color: #68d391; }
+  .info-card p { font-size: 12px; color: #a0aec0; line-height: 1.5; }
+
+  /* === SIMULATION AREA === */
+  .sim-area {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .sim-title {
+    font-size: 14px; font-weight: 600; color: #90cdf4;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+  }
+  .sim-title .dot { width: 8px; height: 8px; border-radius: 50%; background: #63b3ed; }
+
+  /* TOPOLOGY */
+  .topology { position: relative; height: 300px; margin-bottom: 16px; }
+  .node {
+    position: absolute;
+    width: 80px; height: 80px;
+    border-radius: 12px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 4px;
+    font-size: 11px; font-weight: 600;
+    transition: all 0.4s ease;
+    cursor: pointer;
+    border: 2px solid transparent;
+  }
+  .node-label { font-size: 10px; margin-top: 2px; }
+  .node-value { font-size: 18px; font-weight: 700; }
+
+  .client-node { background: #2d3748; border-color: #4a5568; color: #e2e8f0; left: 50%; top: 20px; transform: translateX(-50%); }
+  .node-a { background: #1c2435; border-color: #2c5282; color: #90cdf4; left: 5%; top: 55%; }
+  .node-b { background: #1c2c25; border-color: #276749; color: #68d391; left: 38%; top: 70%; }
+  .node-c { background: #2c1c2c; border-color: #553c9a; color: #b794f4; left: 72%; top: 55%; }
+
+  .node.updated { animation: flash 0.6s ease; }
+  .node.stale { border-color: #e53e3e !important; box-shadow: 0 0 12px rgba(229,62,62,0.4); }
+  .node.synced { border-color: #38a169 !important; box-shadow: 0 0 12px rgba(56,161,105,0.4); }
+
+  @keyframes flash {
+    0%,100% { transform: scale(1) translateX(var(--tx,0)); }
+    50% { transform: scale(1.08) translateX(var(--tx,0)); }
+  }
+  .client-node.updated { animation: flashCenter 0.6s ease; }
+  @keyframes flashCenter {
+    0%,100% { transform: translateX(-50%) scale(1); }
+    50% { transform: translateX(-50%) scale(1.08); }
+  }
+
+  /* SVG ARROWS */
+  .arrows-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  /* STATUS BADGES */
+  .badge {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 20px; font-size: 10px; font-weight: 600;
+    margin-top: 3px;
+  }
+  .badge-ok { background: #276749; color: #9ae6b4; }
+  .badge-stale { background: #742a2a; color: #feb2b2; }
+  .badge-syncing { background: #744210; color: #fbd38d; }
+
+  /* TIMELINE */
+  .timeline {
+    background: #111520;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 12px;
+    max-height: 130px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+  }
+  .timeline::-webkit-scrollbar { width: 4px; }
+  .timeline::-webkit-scrollbar-track { background: transparent; }
+  .timeline::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+  .tl-entry { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid #1e2535; }
+  .tl-entry:last-child { border-bottom: none; }
+  .tl-time { color: #4a5568; min-width: 46px; font-size: 11px; }
+  .tl-msg { color: #a0aec0; }
+  .tl-msg.highlight { color: #63b3ed; }
+  .tl-msg.warn { color: #f6ad55; }
+  .tl-msg.success { color: #68d391; }
+
+  /* CONTROLS */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+  .btn:active { transform: scale(0.97); }
+  .btn-write { background: #2b6cb0; color: #bee3f8; }
+  .btn-read { background: #276749; color: #c6f6d5; }
+  .btn-sync { background: #744210; color: #fefcbf; }
+  .btn-reset { background: #2d3748; color: #a0aec0; }
+
+  /* CONSISTENCY METER */
+  .meter-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .meter-label { font-size: 12px; color: #718096; min-width: 120px; }
+  .meter-bar { flex: 1; height: 6px; background: #2d3748; border-radius: 3px; overflow: hidden; }
+  .meter-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease, background 0.6s ease; }
+
+  /* LEGEND */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #718096; margin-top: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* RYW SECTION */
+  .ryw-demo {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-radius: 16px;
+    padding: 20px;
+  }
+  .ryw-flow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+  .ryw-step {
+    background: #111520;
+    border: 1px solid #2d3748;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 12px;
+    text-align: center;
+    flex: 1;
+    min-width: 100px;
+  }
+  .ryw-step .step-icon { font-size: 20px; margin-bottom: 4px; }
+  .ryw-step .step-title { font-weight: 600; color: #e2e8f0; margin-bottom: 3px; }
+  .ryw-step .step-desc { color: #718096; font-size: 11px; }
+  .ryw-arrow { color: #4a5568; font-size: 18px; }
+  .ryw-step.active { border-color: #68d391; background: #1a2e25; }
+  .ryw-step.active .step-title { color: #68d391; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Konsistensi Berpusat pada Klien</h1>
+  <p>Simulasi Eventual Consistency & Read-Your-Writes dalam Sistem Terdistribusi</p>
+</header>
+
+<div class="main-container">
+
+  <!-- INFO CARDS -->
+  <div class="info-grid">
+    <div class="info-card eventual">
+      <h3>⚡ Eventual Consistency (Konsistensi Akhir)</h3>
+      <p>Jika tidak ada pembaruan baru, lambat laun <em>seluruh replika akan konvergen menjadi identik</em>. Standar untuk basis data NoSQL dan DNS.</p>
+    </div>
+    <div class="info-card ryw">
+      <h3>👁 Read-Your-Writes</h3>
+      <p>Jaminan mutlak bahwa operasi pembacaan oleh seorang klien akan <em>selalu menampilkan data terbaru yang baru saja ia tulis</em>, terlepas dari simpul mana yang ia akses.</p>
+    </div>
+  </div>
+
+  <!-- CONSISTENCY METER -->
+  <div class="meter-row">
+    <span class="meter-label">Tingkat Konsistensi</span>
+    <div class="meter-bar"><div class="meter-fill" id="consistencyFill" style="width:100%;background:#68d391"></div></div>
+    <span id="consistencyPct" style="font-size:12px;color:#68d391;min-width:36px;text-align:right">100%</span>
+  </div>
+
+  <!-- SIMULATION -->
+  <div class="sim-area">
+    <div class="sim-title"><div class="dot"></div>Topologi Jaringan — Simulasi Live</div>
+
+    <div class="topology">
+      <svg class="arrows-svg" id="arrowsSvg"></svg>
+
+      <!-- CLIENT -->
+      <div class="node client-node" id="nodeClient">
+        <div style="font-size:20px">💻</div>
+        <div class="node-label">Klien</div>
+        <div class="badge badge-ok" id="clientBadge">aktif</div>
+      </div>
+
+      <!-- NODE A -->
+      <div class="node node-a" id="nodeA">
+        <div style="font-size:18px">🗄</div>
+        <div class="node-value" id="valA">v1</div>
+        <div class="node-label">Node A</div>
+        <div class="badge badge-ok" id="badgeA">sinkron</div>
+      </div>
+
+      <!-- NODE B -->
+      <div class="node node-b" id="nodeB">
+        <div style="font-size:18px">🗄</div>
+        <div class="node-value" id="valB">v1</div>
+        <div class="node-label">Node B</div>
+        <div class="badge badge-ok" id="badgeB">sinkron</div>
+      </div>
+
+      <!-- NODE C -->
+      <div class="node node-c" id="nodeC">
+        <div style="font-size:18px">🗄</div>
+        <div class="node-value" id="valC">v1</div>
+        <div class="node-label">Node C</div>
+        <div class="badge badge-ok" id="badgeC">sinkron</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e53e3e"></div>Data kedaluwarsa (stale)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#38a169"></div>Data terkini (sinkron)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f6ad55"></div>Sedang sinkronisasi</div>
+    </div>
+
+    <!-- TIMELINE LOG -->
+    <div class="timeline" id="timeline">
+      <div class="tl-entry"><span class="tl-time">00:00</span><span class="tl-msg">Sistem diinisialisasi — semua node sinkron pada v1</span></div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="controls">
+      <button class="btn btn-write" onclick="doWrite()">✏️ Tulis Data Baru</button>
+      <button class="btn btn-read" onclick="doRead()">📖 Baca dari Node Acak</button>
+      <button class="btn btn-sync" onclick="doSync()">🔄 Sinkronisasi Bertahap</button>
+      <button class="btn btn-reset" onclick="doReset()">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- READ-YOUR-WRITES DEMO -->
+  <div class="ryw-demo">
+    <div class="sim-title"><div class="dot" style="background:#68d391"></div>Read-Your-Writes — Alur Jaminan</div>
+    <div class="ryw-flow" id="rywFlow">
+      <div class="ryw-step" id="ryw1">
+        <div class="step-icon">✏️</div>
+        <div class="step-title">1. Tulis</div>
+        <div class="step-desc">Klien menulis data ke Node A</div>
+      </div>
+      <div class="ryw-arrow">→</div>
+      <div class="ryw-step" id="ryw2">
+        <div class="step-icon">🔖</div>
+        <div class="step-title">2. Token Versi</div>
+        <div class="step-desc">Sistem catat versi terbaru klien</div>
+      </div>
+      <div class="ryw-arrow">→</div>
+      <div class="ryw-step" id="ryw3">
+        <div class="step-icon">🔍</div>
+        <div class="step-title">3. Baca</div>
+        <div class="step-desc">Klien baca dari Node B/C mana pun</div>
+      </div>
+      <div class="ryw-arrow">→</div>
+      <div class="ryw-step" id="ryw4">
+        <div class="step-icon">✅</div>
+        <div class="step-title">4. Routing</div>
+        <div class="step-desc">Sistem pastikan baca dari node terbaru</div>
+      </div>
+    </div>
+    <p style="font-size:12px;color:#718096;text-align:center">
+      Klik <strong style="color:#f6ad55">"Tulis Data Baru"</strong> lalu <strong style="color:#68d391">"Baca dari Node Acak"</strong> untuk melihat jaminan Read-Your-Writes
+    </p>
+  </div>
+
+</div>
+
+<script>
+  // STATE
+  let version = 1;
+  let nodeVersions = { A: 1, B: 1, C: 1 };
+  let clientVersion = 1;
+  let elapsedSec = 0;
+  let syncInterval = null;
+
+  function getTime() {
+    const m = String(Math.floor(elapsedSec / 60)).padStart(2,'0');
+    const s = String(elapsedSec % 60).padStart(2,'0');
+    return `${m}:${s}`;
+  }
+
+  function addLog(msg, type='') {
+    elapsedSec++;
+    const tl = document.getElementById('timeline');
+    const entry = document.createElement('div');
+    entry.className = 'tl-entry';
+    entry.innerHTML = `<span class="tl-time">${getTime()}</span><span class="tl-msg ${type}">${msg}</span>`;
+    tl.appendChild(entry);
+    tl.scrollTop = tl.scrollHeight;
+  }
+
+  function updateConsistency() {
+    const vals = [nodeVersions.A, nodeVersions.B, nodeVersions.C];
+    const maxV = Math.max(...vals);
+    const synced = vals.filter(v => v === maxV).length;
+    const pct = Math.round((synced / 3) * 100);
+    const fill = document.getElementById('consistencyFill');
+    const pctEl = document.getElementById('consistencyPct');
+    fill.style.width = pct + '%';
+    const color = pct === 100 ? '#68d391' : pct >= 66 ? '#f6ad55' : '#e53e3e';
+    fill.style.background = color;
+    pctEl.style.color = color;
+    pctEl.textContent = pct + '%';
+  }
+
+  function refreshNodeUI() {
+    const nodes = ['A','B','C'];
+    const maxV = Math.max(nodeVersions.A, nodeVersions.B, nodeVersions.C);
+    nodes.forEach(n => {
+      const el = document.getElementById('node'+n);
+      const val = document.getElementById('val'+n);
+      const badge = document.getElementById('badge'+n);
+      val.textContent = 'v' + nodeVersions[n];
+      el.classList.remove('stale','synced','updated');
+      badge.className = 'badge';
+      if (nodeVersions[n] < maxV) {
+        el.classList.add('stale');
+        badge.classList.add('badge-stale');
+        badge.textContent = 'kedaluwarsa';
+      } else {
+        el.classList.add('synced');
+        badge.classList.add('badge-ok');
+        badge.textContent = 'sinkron';
+      }
+    });
+    updateConsistency();
+  }
+
+  function animateNode(id) {
+    const el = document.getElementById(id);
+    el.classList.remove('updated');
+    void el.offsetWidth;
+    el.classList.add('updated');
+  }
+
+  function doWrite() {
+    version++;
+    clientVersion = version;
+    // Only write to Node A (primary)
+    nodeVersions.A = version;
+    nodeVersions.B = version - 1; // simulate lag
+    nodeVersions.C = version - 1;
+
+    animateNode('nodeClient');
+    animateNode('nodeA');
+    refreshNodeUI();
+
+    addLog(`Klien menulis data → Node A diperbarui ke <strong>v${version}</strong>`, 'highlight');
+    addLog(`Node B & C belum menerima pembaruan — masih di v${version-1}`, 'warn');
+
+    // Highlight RYW step 1 & 2
+    ['ryw1','ryw2','ryw3','ryw4'].forEach(id => document.getElementById(id).classList.remove('active'));
+    document.getElementById('ryw1').classList.add('active');
+    document.getElementById('ryw2').classList.add('active');
+
+    drawArrows();
+    scheduleAutoSync();
+  }
+
+  function doRead() {
+    const nodes = ['A','B','C'];
+    const picked = nodes[Math.floor(Math.random()*3)];
+    const readVal = nodeVersions[picked];
+
+    animateNode('node'+picked);
+
+    if (readVal === clientVersion) {
+      addLog(`Baca dari Node ${picked} → ✅ v${readVal} (sesuai tulisan terbaru klien) — RYW terpenuhi`, 'success');
+      document.getElementById('ryw3').classList.add('active');
+      document.getElementById('ryw4').classList.add('active');
+    } else {
+      addLog(`Baca dari Node ${picked} → ⚠️ v${readVal} (klien tulis v${clientVersion}) — node belum sinkron`, 'warn');
+      document.getElementById('ryw3').classList.add('active');
+    }
+  }
+
+  function doSync() {
+    const maxV = Math.max(nodeVersions.A, nodeVersions.B, nodeVersions.C);
+    let synced = false;
+    ['A','B','C'].forEach(n => {
+      if (nodeVersions[n] < maxV) {
+        nodeVersions[n] = maxV;
+        synced = true;
+        animateNode('node'+n);
+      }
+    });
+    if (synced) {
+      addLog(`Propagasi data: semua node kini di v${maxV} — eventual consistency tercapai! 🎉`, 'success');
+    } else {
+      addLog(`Semua node sudah sinkron di v${maxV}`, '');
+    }
+    refreshNodeUI();
+    drawArrows();
+  }
+
+  function doReset() {
+    version = 1; clientVersion = 1;
+    nodeVersions = { A: 1, B: 1, C: 1 };
+    elapsedSec = 0;
+    if (syncInterval) clearTimeout(syncInterval);
+    document.getElementById('timeline').innerHTML = '<div class="tl-entry"><span class="tl-time">00:00</span><span class="tl-msg">Sistem di-reset — semua node sinkron pada v1</span></div>';
+    ['ryw1','ryw2','ryw3','ryw4'].forEach(id => document.getElementById(id).classList.remove('active'));
+    refreshNodeUI();
+    drawArrows();
+  }
+
+  function scheduleAutoSync() {
+    if (syncInterval) clearTimeout(syncInterval);
+    syncInterval = setTimeout(() => {
+      addLog(`[Auto] Propagasi bertahap dimulai...`, 'warn');
+      doSync();
+    }, 4000);
+  }
+
+  // Draw arrows using SVG overlay
+  function getCenter(el) {
+    const topo = el.closest('.topology') || el.parentElement;
+    const topoRect = document.querySelector('.topology').getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    return {
+      x: elRect.left - topoRect.left + elRect.width/2,
+      y: elRect.top - topoRect.top + elRect.height/2
+    };
+  }
+
+  function drawArrows() {
+    const svg = document.getElementById('arrowsSvg');
+    const maxV = Math.max(nodeVersions.A, nodeVersions.B, nodeVersions.C);
+
+    const client = document.getElementById('nodeClient');
+    const nA = document.getElementById('nodeA');
+    const nB = document.getElementById('nodeB');
+    const nC = document.getElementById('nodeC');
+
+    const cC = getCenter(client);
+    const cA = getCenter(nA);
+    const cB = getCenter(nB);
+    const cCn = getCenter(nC);
+
+    function lineColor(n) {
+      return nodeVersions[n] < maxV ? '#e53e3e' : '#38a169';
+    }
+
+    svg.innerHTML = `
+      <defs>
+        <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0 0L6 3L0 6Z" fill="#4a5568"/>
+        </marker>
+      </defs>
+      <line x1="${cC.x}" y1="${cC.y}" x2="${cA.x}" y2="${cA.y}" stroke="${lineColor('A')}" stroke-width="2" stroke-opacity="0.6" marker-end="url(#arr)"/>
+      <line x1="${cC.x}" y1="${cC.y}" x2="${cB.x}" y2="${cB.y}" stroke="${lineColor('B')}" stroke-width="2" stroke-opacity="0.6" marker-end="url(#arr)"/>
+      <line x1="${cC.x}" y1="${cC.y}" x2="${cCn.x}" y2="${cCn.y}" stroke="${lineColor('C')}" stroke-width="2" stroke-opacity="0.6" marker-end="url(#arr)"/>
+      <line x1="${cA.x}" y1="${cA.y}" x2="${cB.x}" y2="${cB.y}" stroke="#2d3748" stroke-width="1.5" stroke-dasharray="5,4" stroke-opacity="0.5"/>
+      <line x1="${cB.x}" y1="${cB.y}" x2="${cCn.x}" y2="${cCn.y}" stroke="#2d3748" stroke-width="1.5" stroke-dasharray="5,4" stroke-opacity="0.5"/>
+      <line x1="${cA.x}" y1="${cA.y}" x2="${cCn.x}" y2="${cCn.y}" stroke="#2d3748" stroke-width="1.5" stroke-dasharray="5,4" stroke-opacity="0.5"/>
+    `;
+  }
+
+  // Init arrows after layout
+  window.addEventListener('load', () => {
+    setTimeout(drawArrows, 100);
+    window.addEventListener('resize', drawArrows);
+  });
+</script>
+</body>
+</html>
